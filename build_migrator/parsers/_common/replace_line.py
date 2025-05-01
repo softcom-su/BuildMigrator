@@ -26,7 +26,7 @@ class ReplaceLine(Parser):
 
     @staticmethod
     def is_applicable(log_type=None):
-        return log_type in ["make", "ninja", "msbuild"]
+        return log_type in ["make", "ninja", "msbuild", "qmake"]
 
     def __replace_line__(self, line):
         replaced_line = line

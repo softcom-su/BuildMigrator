@@ -1,0 +1,7 @@
+{
+    "log_type": "qmake",
+    "parsers": [
+        "build_log_parser",
+        "qmake"
+    ]
+}

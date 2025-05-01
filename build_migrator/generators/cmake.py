@@ -134,6 +134,7 @@ class CMakeContext(EntryPoint, Generator):
         source_subdir=None,
         platform=None,
         flat_build_dir=None,
+        build_dir=None,
     ):
         assert os.path.exists(out_dir)
         if platform is None:
@@ -159,6 +160,15 @@ class CMakeContext(EntryPoint, Generator):
             self.cflags_placeholder,
         ]
 
+        # source_subdir
+        self.source_dir_full_path = os.path.abspath(os.path.join(self.out_dir, self.source_subdir)).replace('\\', '/')
+        # ${CMAKE_CURRENT_LIST_DIR}
+        self.current_list_dir_full_path = os.path.abspath(self.out_dir).replace('\\', '/')
+        # ${CMAKE_CURRENT_BINARY_DIR}
+        if build_dir is None:
+            build_dir = self.out_dir
+        self.build_dir_full_path = os.path.abspath(build_dir).replace('\\', '/')
+
         self.rename_patterns = []
         for pattern, repl in rename_patterns or []:
             self.rename_patterns.append((re.compile(pattern), repl))
@@ -172,15 +182,18 @@ class CMakeContext(EntryPoint, Generator):
             self.source_dir_var = "SOURCE_DIR"
 
         self.vars = {
-            self.build_dir_placeholder: "CMAKE_CURRENT_BINARY_DIR",
-            self.source_dir_placeholder: self.source_dir_var,
             self.cflags_placeholder: "CMAKE_C_FLAGS",
         }
-        self.values = {}
-        self.substitutions = {}
-        for placeholder, var in self.vars.items():
-            self.values[placeholder] = "${" + var + "}"
-            self.substitutions[placeholder] = "@" + var + "@"
+        self.values = {
+            self.build_dir_placeholder: self.build_dir_full_path,
+            self.cflags_placeholder: "${CMAKE_C_FLAGS}",
+            self.source_dir_placeholder: self.source_dir_full_path,
+        }
+        self.substitutions = {
+            self.build_dir_placeholder: self.build_dir_full_path,
+            self.cflags_placeholder: "@CMAKE_C_FLAGS@",
+            self.source_dir_placeholder: self.source_dir_full_path,
+        }
 
         self.target_index = {}
         self.yasm_global_compile_flags = {}
@@ -226,7 +239,7 @@ class CMakeContext(EntryPoint, Generator):
 
     def format_location(self, location, prepend_var=True):
         if prepend_var:
-            location = "${CMAKE_CURRENT_LIST_DIR}/" + location
+            location = self.current_list_dir_full_path + "/" + location
         return self.quote(location)
 
     def format_cache_variable(self, name, value=None, type="STRING"):
@@ -506,14 +519,6 @@ class CMakeContext(EntryPoint, Generator):
                     use_glob=self.copy_prebuilt_files_using_glob,
                 )
             )
-            source_dir = "${CMAKE_CURRENT_LIST_DIR}"
-            if self.source_subdir is not None and self.source_subdir != ".":
-                source_dir += "/" + self.source_subdir.format("\\", "/")
-            f.write(
-                self.format_cache_variable(
-                    self.source_dir_var, '"{}"'.format(source_dir), "PATH"
-                )
-            )
 
             self._process_nasm_yasm_sources(f, targets, yasm_sources, nasm_sources)
 
@@ -672,7 +677,7 @@ class CMakeContext(EntryPoint, Generator):
         result += "\n".join(includes)
         if includes:
             result += "\n"
-        result += "list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR})\n"
+        result += "list(APPEND CMAKE_MODULE_PATH "+self.quote(self.current_list_dir_full_path)+")\n"
         result += "include(extensions)\n\n"
         return result
 

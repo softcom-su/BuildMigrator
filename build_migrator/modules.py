@@ -6,6 +6,8 @@ import os
 import pkgutil
 import sys
 import traceback
+import importlib.util
+import importlib.machinery
 import build_migrator.builders  # noqa: F401
 import build_migrator.generators  # noqa: F401
 import build_migrator.optimizers  # noqa: F401
@@ -587,7 +589,12 @@ def _add_module_arguments(argument_parser, modules):
 
 def _get_argspec_for_init(module_export):
     if hasattr(module_export.__init__, "__code__"):
-        argnames, varargs, kwargs, defaults = inspect.getargspec(module_export.__init__)
+        argspec = inspect.getfullargspec(module_export.__init__)
+        argnames = argspec.args
+        varargs = argspec.varargs
+        kwargs = argspec.varkw
+        defaults = argspec.defaults or []
+
         if varargs:
             msg = "{}: varargs are not allowed in __init__ methods of module exports".format(
                 module_export
@@ -598,8 +605,7 @@ def _get_argspec_for_init(module_export):
                 module_export
             )
             raise ValueError(msg)
-        if defaults is None:
-            defaults = []
+        
         return (
             argnames[1 : len(argnames) - len(defaults)],
             argnames[len(argnames) - len(defaults) :],
@@ -695,9 +701,12 @@ def _enumerate_module_loaders(base_package_name, directories, module_filter=None
             continue
         try:
 
-            def _load(loader=loader, fullname=fullname):
+            def _load(fullname=fullname):
                 _logger.debug("Loading module {}".format(fullname))
-                module = loader.find_module(fullname).load_module(fullname)
+                spec = importlib.util.find_spec(fullname)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[fullname] = module
+                spec.loader.exec_module(module)
                 _logger.debug("Module exports: {}".format(", ".join(module.__all__)))
                 return module
 

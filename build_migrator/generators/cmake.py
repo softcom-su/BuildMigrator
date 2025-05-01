@@ -122,6 +122,18 @@ class CMakeContext(EntryPoint, Generator):
             help="Ignore output subdirectories for module targets. For example, "
             "@build_dir@/1/2/3/libfoo.a becomes @build_dir@/libfoo.a.",
         )
+        arg_parser.add_argument(
+            "--qt_version",
+            choices=["5", "6"],
+            default="5",
+            help="Qt version to use (5 or 6). Default: 5."
+        )
+        arg_parser.add_argument(
+            "--qt_components",
+            metavar="COMPONENT",
+            nargs="+",
+            help="Qt components to include (e.g., Core Gui Widgets)."
+        )
 
     def __init__(
         self,
@@ -135,6 +147,8 @@ class CMakeContext(EntryPoint, Generator):
         platform=None,
         flat_build_dir=None,
         build_dir=None,
+        qt_version="5",
+        qt_components=None,
     ):
         assert os.path.exists(out_dir)
         if platform is None:
@@ -159,6 +173,10 @@ class CMakeContext(EntryPoint, Generator):
             self.source_dir_placeholder,
             self.cflags_placeholder,
         ]
+
+        self.qt_version = qt_version
+        self.qt_components = qt_components or []
+        self.qt_enabled = bool(self.qt_components)
 
         # source_subdir
         self.source_dir_full_path = os.path.abspath(os.path.join(self.out_dir, self.source_subdir)).replace('\\', '/')
@@ -448,12 +466,73 @@ class CMakeContext(EntryPoint, Generator):
 
     def _target_is_in_build_dir(self, target):
         return target["output"].startswith(self.build_dir_placeholder)
+    
+    def _process_qt_sources(self, file, targets, qt_sources):
+        qt_defines = [
+            "-DQT_NO_DEBUG",
+            "-DQT_WIDGETS_LIB",
+            "-DQT_GUI_LIB",
+            "-DQT_CORE_LIB",
+        ]
+        qt_include_prefixes = [
+            "/usr/include/x86_64-linux-gnu/qt5",
+            "/usr/lib/x86_64-linux-gnu/qt5/mkspecs",
+        ]
+        qt_libs = [
+            "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so",
+            "/usr/lib/x86_64-linux-gnu/libQt5Gui.so",
+            "/usr/lib/x86_64-linux-gnu/libQt5Core.so",
+        ]
+        for target in targets:
+            if target["type"] == "module":
+                # Remove moc_ and ui_ sources, as they will be handled by AUTOMOC/AUTOUIC
+                target["sources"] = [
+                    s for s in target.get("sources", [])
+                    if not (s["path"].endswith("moc_mainwindow.cpp") or
+                            s["path"].endswith("ui_mainwindow.h"))
+                ]
+                # Add .ui file to sources
+                for source in qt_sources:
+                    if source.get("extension") == ".ui":
+                        target["sources"].append(source)
+                # Clean up compile flags and include dirs
+                for source in target.get("sources", []):
+                    if "compile_flags" in source:
+                        source["compile_flags"] = [
+                            f for f in source["compile_flags"] if f not in qt_defines
+                        ]
+                    if "include_dirs" in source:
+                        source["include_dirs"] = [
+                            d for d in source["include_dirs"]
+                            if not any(d.startswith(p) for p in qt_include_prefixes)
+                        ]
+                if "libs" in target:
+                    # Map Qt libs to Qt5:: targets, deduplicate, keep others
+                    unique_libs = []
+                    seen = set()
+                    for lib in target["libs"]:
+                        if lib in qt_libs:
+                            if lib == "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so":
+                                lib = "Qt5::Widgets"
+                            elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Gui.so":
+                                lib = "Qt5::Gui"
+                            elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Core.so":
+                                lib = "Qt5::Core"
+                        if lib == "GL":
+                            lib = "OpenGL::GL"
+                        elif lib == "pthread":
+                            lib = "Threads::Threads"
+                        if lib not in seen:
+                            unique_libs.append(lib)
+                            seen.add(lib)
+                    target["libs"] = unique_libs
 
     def initialize_cmakelist(self, targets):
         languages = set()
 
         yasm_sources = []
         nasm_sources = []
+        qt_sources = []
         class_id = 1
         modules_found = False
         prebuilt_file_counter = 0
@@ -479,6 +558,8 @@ class CMakeContext(EntryPoint, Generator):
                         yasm_sources.append(s)
                     if lang == "NASM":
                         nasm_sources.append(s)
+                    if s.get("extension") in [".ui", ".qrc"]:
+                        qt_sources.append(s)
                 modules_found = True
 
         if self.prebuilt_subdir not in (None, "."):
@@ -520,8 +601,27 @@ class CMakeContext(EntryPoint, Generator):
                 )
             )
 
-            self._process_nasm_yasm_sources(f, targets, yasm_sources, nasm_sources)
+            has_qt = any(
+                any(lib in [
+                    "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so",
+                    "/usr/lib/x86_64-linux-gnu/libQt5Gui.so",
+                    "/usr/lib/x86_64-linux-gnu/libQt5Core.so",
+                    "Qt5::Widgets", "Qt5::Gui", "Qt5::Core"
+                ] for lib in t.get("libs", [])) for t in targets
+            )
+            if has_qt:
+                f.write("find_package(Qt5 COMPONENTS Widgets Gui Core REQUIRED)\n")
+                f.write("set(CMAKE_AUTOMOC ON)\n")
+                f.write("set(CMAKE_AUTOUIC ON)\n")
+                f.write("set(CMAKE_AUTORCC ON)\n")
+            if any("GL" in t.get("libs", []) or "OpenGL::GL" in t.get("libs", []) for t in targets):
+                f.write("find_package(OpenGL REQUIRED)\n")
+            if any("pthread" in t.get("libs", []) or "Threads::Threads" in t.get("libs", []) for t in targets):
+                f.write("find_package(Threads REQUIRED)\n")
+            f.write("\n")
 
+            self._process_nasm_yasm_sources(f, targets, yasm_sources, nasm_sources)
+            self._process_qt_sources(f, targets, qt_sources)
             self._process_version_properties(self.target_index)
 
     def finalize_cmakelists(self):
@@ -645,6 +745,12 @@ class CMakeContext(EntryPoint, Generator):
     def format_link_flags(self, target_name, flags):
         return self.format_call(
             "target_link_options", [target_name, "PRIVATE"], flatten_list(flags)
+        )
+    
+    def format_target_output_subdir(self, target_name, output_dir):
+        return self.format_call(
+            "set_target_output_subdir",
+            [target_name, "RUNTIME_OUTPUT_DIRECTORY", self.quote(output_dir)]
         )
 
     def format_header(
@@ -847,6 +953,14 @@ endforeach()
 """
 
     def _generate_for_file(self, target):
+        # Skip prebuilt Qt files (ui_*.h, moc_*.cpp) as they are handled by AUTOMOC/AUTOUIC
+        if self._target_is_in_build_dir(target):
+            filename = os.path.basename(target["output"])
+            if filename.startswith("ui_") and filename.endswith(".h"):
+                return
+            if filename.startswith("moc_") and filename.endswith(".cpp"):
+                return
+    
         if sys.version_info >= (3, 0) and isinstance(target["content"], str):
             mode = "wt"
         else:

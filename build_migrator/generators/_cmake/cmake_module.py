@@ -96,6 +96,34 @@ class CMakeModule(Generator):
             # Additional newline between targets
             f.write("\n")
 
+            # Analyze and group compiler flags
+            file_flags = {src["path"]: src.get("compile_flags", []) for src in target["sources"]}
+            if file_flags and any(file_flags.values()):
+                common_flags = set(file_flags[next(iter(file_flags))])
+                for flags in file_flags.values():
+                    common_flags &= set(flags)
+                unique_file_flags = {}
+                for path, flags in file_flags.items():
+                    unique_flags = set(flags) - common_flags
+                    if unique_flags:
+                        unique_file_flags[path] = list(unique_flags)
+                if common_flags:
+                    target["compile_flags"] = list(common_flags) + target.get("compile_flags", [])
+
+            # Analyze and group include directories
+            file_dirs = {src["path"]: src.get("include_dirs", []) for src in target["sources"]}
+            if file_dirs and any(file_dirs.values()):
+                common_dirs = set(file_dirs[next(iter(file_dirs))])
+                for dirs in file_dirs.values():
+                    common_dirs &= set(dirs)
+                unique_file_dirs = {}
+                for path, dirs in file_dirs.items():
+                    unique_dirs = set(dirs) - common_dirs
+                    if unique_dirs:
+                        unique_file_dirs[path] = list(unique_dirs)
+                if common_dirs:
+                    target["include_dirs"] = list(common_dirs) + target.get("include_dirs", [])
+
             cmake_supported_srcs = list(
                 filter(lambda t: t["language"] != "YASM", target["sources"])
             )
@@ -133,7 +161,7 @@ class CMakeModule(Generator):
                     specify_linker_language = True
 
             for source in target["sources"]:
-                compile_flags = source.get("compile_flags")
+                compile_flags = unique_file_flags.get(source["path"])
                 if compile_flags:
                     compile_flags = self.context.process_compile_flags(compile_flags)
                     # TODO: use source_compile_options()
@@ -159,7 +187,7 @@ class CMakeModule(Generator):
                                 path_, prev_value, value_
                             )
                         )
-                include_dirs = source.get("include_dirs")
+                include_dirs = unique_file_dirs.get(source["path"])
                 if include_dirs:
                     # TODO: use source_include_directories()
                     path_ = source["path"]

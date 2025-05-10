@@ -610,10 +610,11 @@ class CMakeContext(EntryPoint, Generator):
                 ] for lib in t.get("libs", [])) for t in targets
             )
             if has_qt:
-                f.write("find_package(Qt5 COMPONENTS Widgets Gui Core REQUIRED)\n")
                 f.write("set(CMAKE_AUTOMOC ON)\n")
                 f.write("set(CMAKE_AUTOUIC ON)\n")
                 f.write("set(CMAKE_AUTORCC ON)\n")
+                f.write("\n")
+                f.write("find_package(Qt5 COMPONENTS Widgets Gui Core REQUIRED)\n")
             if any("GL" in t.get("libs", []) or "OpenGL::GL" in t.get("libs", []) for t in targets):
                 f.write("find_package(OpenGL REQUIRED)\n")
             if any("pthread" in t.get("libs", []) or "Threads::Threads" in t.get("libs", []) for t in targets):

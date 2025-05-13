@@ -2,6 +2,7 @@ from __future__ import print_function
 import re
 import logging
 import os
+import uuid
 try:
     from build_migrator.modules import Parser
 except ImportError:
@@ -29,36 +30,46 @@ class QmakeLogParser(Parser):
             "sources": re.compile(r"DEBUG 1: .+?\.pro:\d+: SOURCES := (.+)"),
             "headers": re.compile(r"DEBUG 1: .+?\.pro:\d+: HEADERS := (.+)"),
             "forms": re.compile(r"DEBUG 1: .+?\.pro:\d+: FORMS := (.+)"),
-            "resources": re.compile(r"DEBUG 1: .+?\.prf:\d+: RESOURCES := (.+)"),
-            "includepath": re.compile(r"DEBUG 1: .+?\.prf:\d+: INCLUDEPATH := (.+)"),
-            "libs": re.compile(r"DEBUG 1: .+?\.prf:\d+: LIBS := (.+)"),
+            "resources": re.compile(r"DEBUG 1: .+?\.pro:\d+: RESOURCES := (.+)"),
+            "includepath": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: INCLUDEPATH := (.+)"),
+            "libs": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: LIBS := (.+)"),
             "target": re.compile(r"DEBUG 1: .+?\.pro:\d+: TARGET := (.+)"),
             "template": re.compile(r"DEBUG 1: .+?\.pro:\d+: TEMPLATE := (.+)"),
-            "cxx": re.compile(r"DEBUG 1: .+?\.pro:\d+: QMAKE_CXX := (.+)"),
-            "cc": re.compile(r"DEBUG 1: .+?\.prf:\d+: QMAKE_CC := (.+)"),
-            "cxxflags": re.compile(r"DEBUG 1: .+?\.prf:\d+: QMAKE_CXXFLAGS := (.+)"),
-            "cflags": re.compile(r"DEBUG 1: .+?\.prf:\d+: QMAKE_CFLAGS := (.+)"),
-            "defines": re.compile(r"DEBUG 1: .+?\.prf:\d+: DEFINES := (.+)"),
-            "config": re.compile(r"DEBUG 1: .+?\.prf:\d+: CONFIG := (.+)"),
-            "lflags": re.compile(r"DEBUG 1: .+?\.prf:\d+: QMAKE_LFLAGS := (.+)"),
-            "qt": re.compile(r"DEBUG 1: .+?\.prf:\d+: QT := (.+)"),
-            "moc_dir": re.compile(r"DEBUG 1: .+?\.prf:\d+: MOC_DIR := (.+)"),
-            "ui_dir": re.compile(r"DEBUG 1: .+?\.prf:\d+: UI_DIR := (.+)"),
-            "rcc_dir": re.compile(r"DEBUG 1: .+?\.prf:\d+: RCC_DIR := (.+)"),
+            "cxx": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXX := (.+)"),
+            "cc": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CC := (.+)"),
+            "cxxflags": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXXFLAGS := (.+)"),
+            "cflags": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CFLAGS := (.+)"),
+            "defines": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: DEFINES := (.+)"),
+            "config": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG := (.+)"),
+            "lflags": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_LFLAGS := (.+)"),
+            "qt": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QT := (.+)"),
+            "moc_dir": re.compile(r"DEBUG 1: .+?\.pro:\d+: MOC_DIR := (.+)"),
+            "ui_dir": re.compile(r"DEBUG 1: .+?\.pro:\d+: UI_DIR := (.+)"),
+            "rcc_dir": re.compile(r"DEBUG 1: .+?\.pro:\d+: RCC_DIR := (.+)"),
             "subdirs": re.compile(r"DEBUG 1: .+?\.pro:\d+: SUBDIRS := (.+)"),
-            "debug_config": re.compile(r"DEBUG 1: .+?\.prf:\d+: CONFIG\(debug, debug\|release\)\s*\{(.+?)\}"),
-            "release_config": re.compile(r"DEBUG 1: .+?\.prf:\d+: CONFIG\(release, debug\|release\)\s*\{(.+?)\}"),
-            "destdir": re.compile(r"DEBUG 1: .+?\.prf:\d+: DESTDIR := (.+)"),
-            "dependpath": re.compile(r"DEBUG 1: .+?\.prf:\d+: DEPENDPATH := (.+)"),
-            "precompiled_header": re.compile(r"DEBUG 1: .+?\.prf:\d+: PRECOMPILED_HEADER := (.+)"),
-            "platform_win32": re.compile(r"DEBUG 1: .+?\.prf:\d+: win32\s*\{(.+?)\}"),
-            "platform_unix": re.compile(r"DEBUG 1: .+?\.prf:\d+: unix\s*\{(.+?)\}"),
-            "platform_macx": re.compile(r"DEBUG 1: .+?\.prf:\d+: macx\s*\{(.+?)\}"),
-            "testcase": re.compile(r"DEBUG 1: .+?\.prf:\d+: CONFIG\s*\+=\s*testcase"),
-            "cxxflags_release": re.compile(r"DEBUG 1: .+?\.prf:\d+: QMAKE_CXXFLAGS_RELEASE := (.+)"),
-            "cxxflags_debug": re.compile(r"DEBUG 1: .+?\.prf:\d+: QMAKE_CXXFLAGS_DEBUG := (.+)"),
-            "distfiles": re.compile(r"DEBUG 1: .+?\.prf:\d+: DISTFILES := (.+)"),
-            "version": re.compile(r"DEBUG 1: .+?\.prf:\d+: VERSION := (.+)"),
+            "debug_config": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG\(debug, debug\|release\)\s*\{(.+?)\}"),
+            "release_config": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG\(release, debug\|release\)\s*\{(.+?)\}"),
+            "destdir": re.compile(r"DEBUG 1: .+?\.pro:\d+: DESTDIR := (.+)"),
+            "dependpath": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: DEPENDPATH := (.+)"),
+            "precompiled_header": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: PRECOMPILED_HEADER := (.+)"),
+            "platform_win32": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: win32\s*\{(.+?)\}"),
+            "platform_unix": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: unix\s*\{(.+?)\}"),
+            "platform_macx": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: macx\s*\{(.+?)\}"),
+            "testcase": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG\s*\+=\s*testcase"),
+            "cxxflags_release": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXXFLAGS_RELEASE := (.+)"),
+            "cxxflags_debug": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXXFLAGS_DEBUG := (.+)"),
+            "distfiles": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: DISTFILES := (.+)"),
+            "version": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: VERSION := (.+)"),
+            "extra_compilers": re.compile(r"DEBUG 1: .+?\.pro:\d+: QMAKE_EXTRA_COMPILERS\s*:=\s*(.+)"),
+            "compiler_input": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.input\s*:=\s*(.+)"),
+            "compiler_output": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.output\s*:=\s*(.+)"),
+            "compiler_variable": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.variable\s*:=\s*(.+)"),
+            "extra_targets": re.compile(r"DEBUG 1: .+?\.pro:\d+: QMAKE_EXTRA_TARGETS\s*\:=\s*(.+)"),
+            "target_target": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.target\s*:=\s*(.+)"),
+            "target_depends": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.depends\s*:=\s*(.+)"),
+            "pre_targetdeps": re.compile(r"DEBUG 1: .+?\.pro:\d+: PRE_TARGETDEPS\s*\:=\s*(.+)"),
+            "post_targetdeps": re.compile(r"DEBUG 1: .+?\.pro:\d+: QMAKE_POST_TARGETDEPS\s*\:=\s*(.+)"),
+            "commands": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.commands\s*:=\s*(.+)"),
         }
         self.global_config = {
             "includes": set(),
@@ -73,6 +84,7 @@ class QmakeLogParser(Parser):
             "sources": set(),
             "forms": set(),
             "resources": set(),
+            "distfiles": set(),
             "qt_modules": set(),
             "moc_dir": "@build_dir@/moc",
             "ui_dir": "@build_dir@/uic",
@@ -84,7 +96,8 @@ class QmakeLogParser(Parser):
             "platform_settings": {"win32": set(), "unix": set(), "macx": set()},
             "testcase": False,
             "version": None,
-            "distfiles": set(),
+            "custom_commands": [],
+            "custom_targets": [],
         }
         self.build_object_model = []
         self.processed_sources = set()
@@ -109,6 +122,10 @@ class QmakeLogParser(Parser):
             "/usr/include/x86_64-linux-gnu/qt5/QtCore",
             "/usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++"
         }
+        self.custom_compilers = {}
+        self.custom_targets_info = {}
+        self.post_targetdeps = {}
+        self.commands = {}
 
     def _read_file_content(self, path):
         try:
@@ -125,9 +142,13 @@ class QmakeLogParser(Parser):
         include_dirs = set(["@source_dir@", "@build_dir@/_build", "@source_dir@/include"])
         include_dirs.update(self.global_config["includes"])
         include_dirs.update(self.global_config["dependpath"])
+        if self.global_config["rcc_dir"]:
+            include_dirs.add(self.global_config["rcc_dir"])
+        if self.global_config["ui_dir"]:
+            include_dirs.add(self.global_config["ui_dir"])
         if self.is_qt_project:
             include_dirs.update(self.qt_include_dirs)
-        return sorted([path for path in include_dirs if not path.endswith((".pro", ".prf")) and path != "prf" and path != "pro"])
+        return sorted([path for path in include_dirs if not path.endswith((".pro", ".prf")) and path not in ("prf", "pro")])
 
     def _check_for_qobject(self, content):
         return content and b"Q_OBJECT" in content
@@ -172,13 +193,51 @@ class QmakeLogParser(Parser):
                         self.global_config["libs"].add(lib_name)
                 elif lib.startswith("-L"):
                     include_path = self._post_normalize_path(self.context.normalize_path(lib[2:], ignore_working_dir=True))
-                    if include_path not in self.global_config["includes"] and not include_path.endswith((".pro", ".prf")) and include_path != "prf" and include_path != "pro":
+                    if include_path not in self.global_config["includes"] and not include_path.endswith((".pro", ".prf")) and include_path not in ("prf", "pro"):
                         self.global_config["includes"].add(include_path)
                 else:
                     normalized_lib = self._post_normalize_path(self.context.normalize_path(lib, ignore_working_dir=True))
                     if normalized_lib not in self.global_config["libs"] and not normalized_lib.endswith((".pro", ".prf")) and normalized_lib != "prf" and (os.path.isfile(normalized_lib) or normalized_lib == "fmt"):
                         self.global_config["libs"].add(normalized_lib)
                 logger.debug(f"Added {platform} LIB: {lib}")
+
+    def _process_custom_command(self, compiler_name, input_files, output, commands):
+        command_id = str(uuid.uuid4())
+        normalized_command = commands.strip()
+        normalized_output = self._post_normalize_path(self.context.normalize_path(output, ignore_working_dir=True))
+        normalized_inputs = [self._post_normalize_path(self.context.normalize_path(inp, ignore_working_dir=True)) for inp in input_files]
+        self.global_config["custom_commands"].append({
+            "id": command_id,
+            "command": normalized_command,
+            "output": normalized_output,
+            "inputs": normalized_inputs
+        })
+        self.build_object_model.append({
+            "type": "custom_command",
+            "command": normalized_command,
+            "output": normalized_output,
+            "dependencies": normalized_inputs,
+            "id": command_id
+        })
+
+    def _process_custom_target(self, target_name, target, commands, depends):
+        target_id = str(uuid.uuid4())
+        normalized_target = self._post_normalize_path(self.context.normalize_path(target, ignore_working_dir=True))
+        normalized_deps = [self._post_normalize_path(self.context.normalize_path(dep, ignore_working_dir=True)) for dep in depends]
+        normalized_commands = [cmd.strip() for cmd in commands.split("&&")]
+        self.global_config["custom_targets"].append({
+            "id": target_id,
+            "name": normalized_target,
+            "dependencies": normalized_deps,
+            "commands": normalized_commands
+        })
+        self.build_object_model.append({
+            "type": "custom_target",
+            "name": normalized_target,
+            "dependencies": normalized_deps,
+            "commands": normalized_commands,
+            "id": target_id
+        })
 
     def parse(self, target):
         line = target.get("line", "")
@@ -195,7 +254,22 @@ class QmakeLogParser(Parser):
             for key, pattern in self.patterns.items():
                 match = pattern.search(line)
                 if match:
-                    value = match.group(1).strip() if key not in ["debug_config", "release_config", "platform_win32", "platform_unix", "platform_macx", "testcase"] else match.group(0)
+                    if key in ["debug_config", "release_config", "platform_win32", "platform_unix", "platform_macx", "testcase"]:
+                        value = match.group(0)
+                    elif key in ["compiler_input", "compiler_output", "compiler_variable", "commands", "target_target", "target_depends"]:
+                        if match.groups() and len(match.groups()) >= 2:
+                            value = match.groups()
+                        else:
+                            logger.warning(f"Invalid format for {key} in line: {line}")
+                            continue
+                    elif "(pro|prf)" in pattern.pattern:
+                        if match.groups() and len(match.groups()) >= 2:
+                            value = match.group(2).strip()
+                        else:
+                            logger.warning(f"Missing group(2) for {key} in line: {line}")
+                            continue
+                    else:
+                        value = match.group(1).strip()
                     if not value and key not in ["testcase"]:
                         logger.warning("Empty value for %s in line: %s" % (key, line))
                         continue
@@ -324,8 +398,7 @@ class QmakeLogParser(Parser):
                                     ignore_working_dir=False
                                 ))
                                 if output not in self.rcc_sources:
-                                    self.moc_sources.add(output)
-                                    self.global_config["sources"].add(output)
+                                    self.rcc_sources.add(output)
                                 content = self._read_file_content(resource_path)
                                 if content is not None:
                                     self.build_object_model.append({
@@ -336,10 +409,22 @@ class QmakeLogParser(Parser):
                                         "extension": ".qrc"
                                     })
                                 logger.debug("Added RESOURCE: %s -> %s" % (resource_path, output))
+                    elif key == "distfiles":
+                        for distfile in value.split():
+                            distfile_path = self._post_normalize_path(self.context.normalize_path(distfile, working_dir=self.context.source_dir))
+                            self.global_config["distfiles"].add(distfile_path)
+                            content = self._read_file_content(distfile_path)
+                            if content is not None:
+                                self.build_object_model.append({
+                                    "content": content,
+                                    "output": distfile_path,
+                                    "dependencies": [],
+                                    "type": "file"
+                                })
                     elif key == "includepath":
                         for path in value.split():
                             normalized_path = self._post_normalize_path(self.context.normalize_path(path, ignore_working_dir=True))
-                            if normalized_path not in self.global_config["includes"] and not normalized_path.endswith((".pro", ".prf")) and normalized_path != "prf" and normalized_path != "pro":
+                            if normalized_path not in self.global_config["includes"] and not normalized_path.endswith((".pro", ".prf")) and normalized_path not in ("prf", "pro"):
                                 self.global_config["includes"].add(normalized_path)
                                 logger.debug("Added INCLUDEPATH: %s (normalized: %s)" % (path, normalized_path))
                     elif key == "libs":
@@ -350,7 +435,7 @@ class QmakeLogParser(Parser):
                                     self.global_config["libs"].add(lib_name)
                             elif lib.startswith("-L"):
                                 include_path = self._post_normalize_path(self.context.normalize_path(lib[2:], ignore_working_dir=True))
-                                if include_path not in self.global_config["includes"] and not include_path.endswith((".pro", ".prf")) and include_path != "prf" and include_path != "pro":
+                                if include_path not in self.global_config["includes"] and not include_path.endswith((".pro", ".prf")) and include_path not in ("prf", "pro"):
                                     self.global_config["includes"].add(include_path)
                             else:
                                 normalized_lib = self._post_normalize_path(self.context.normalize_path(lib, ignore_working_dir=True))
@@ -500,7 +585,7 @@ class QmakeLogParser(Parser):
                     elif key == "dependpath":
                         for path in value.split():
                             normalized_path = self._post_normalize_path(self.context.normalize_path(path, ignore_working_dir=True))
-                            if normalized_path not in self.global_config["dependpath"] and not normalized_path.endswith((".pro", ".prf")) and normalized_path != "prf" and normalized_path != "pro":
+                            if normalized_path not in self.global_config["dependpath"] and not normalized_path.endswith((".pro", ".prf")) and normalized_path not in ("prf", "pro"):
                                 self.global_config["dependpath"].add(normalized_path)
                                 logger.debug("Added DEPENDPATH: %s (normalized: %s)" % (path, normalized_path))
                     elif key == "precompiled_header":
@@ -554,6 +639,68 @@ class QmakeLogParser(Parser):
                     elif key == "version":
                         self.global_config["version"] = value
                         logger.debug("Set VERSION: %s" % value)
+                    elif key == "extra_compilers":
+                        for compiler in value.split():
+                            if compiler not in self.custom_compilers:
+                                self.custom_compilers[compiler] = {"input": [], "output": "", "commands": "", "variable": ""}
+                    elif key == "compiler_input":
+                        compiler_name, inputs = value
+                        if compiler_name not in self.custom_compilers:
+                            self.custom_compilers[compiler_name] = {"input": [], "output": "", "commands": "", "variable": ""}
+                        self.custom_compilers[compiler_name]["input"] = inputs.split() if inputs else []
+                    elif key == "compiler_output":
+                        compiler_name, output = value
+                        if compiler_name not in self.custom_compilers:
+                            self.custom_compilers[compiler_name] = {"input": [], "output": "", "commands": "", "variable": ""}
+                        self.custom_compilers[compiler_name]["output"] = output
+                    elif key == "compiler_variable":
+                        compiler_name, variable = value
+                        if compiler_name not in self.custom_compilers:
+                            self.custom_compilers[compiler_name] = {"input": [], "output": "", "commands": "", "variable": ""}
+                        self.custom_compilers[compiler_name]["variable"] = variable
+                    elif key == "commands":
+                        target_name, commands = value
+                        self.commands[target_name] = commands
+                        if target_name in self.post_targetdeps:
+                            self.post_targetdeps[target_name]["commands"] = commands
+                        elif target_name in self.custom_targets_info:
+                            self.custom_targets_info[target_name]["commands"] = commands
+                        elif target_name in self.custom_compilers:
+                            self.custom_compilers[target_name]["commands"] = commands
+                        else:
+                            self.custom_targets_info[target_name] = {"target": target_name, "commands": commands, "depends": []}
+                    elif key == "extra_targets":
+                        for target_name in value.split():
+                            if target_name not in self.custom_targets_info:
+                                self.custom_targets_info[target_name] = {"target": "", "commands": "", "depends": []}
+                    elif key == "target_target":
+                        target_name, target = value
+                        if target_name in self.custom_targets_info:
+                            self.custom_targets_info[target_name]["target"] = target
+                        elif target_name in self.custom_compilers:
+                            self.custom_compilers[target_name]["target"] = target
+                        else:
+                            self.custom_targets_info[target_name] = {"target": target, "commands": "", "depends": []}
+                    elif key == "target_depends":
+                        target_name, depends = value
+                        if target_name in self.custom_targets_info:
+                            self.custom_targets_info[target_name]["depends"] = depends.split()
+                        elif target_name in self.custom_compilers:
+                            self.custom_compilers[target_name]["depends"] = depends.split()
+                    elif key == "pre_targetdeps":
+                        for dep in value.split():
+                            normalized_dep = self._post_normalize_path(self.context.normalize_path(dep, ignore_working_dir=True))
+                            for target_name, info in self.custom_targets_info.items():
+                                if info["target"] == dep:
+                                    self._process_custom_target(target_name, info["target"], info["commands"], info["depends"])
+                                    break
+                    elif key == "post_targetdeps":
+                        for target_name in value.split():
+                            if target_name not in self.post_targetdeps:
+                                self.post_targetdeps[target_name] = {"target": target_name, "commands": "", "depends": []}
+                                if target_name in self.custom_targets_info:
+                                    self.post_targetdeps[target_name]["depends"] = self.custom_targets_info[target_name]["depends"]
+                                    self.post_targetdeps[target_name]["target"] = self.custom_targets_info[target_name]["target"]
                     target["line"] = ""
 
         if is_eof:
@@ -561,6 +708,15 @@ class QmakeLogParser(Parser):
             self.context.build_object_model = self.build_object_model
             logger.debug("context.build_object_model after save: %s" % self.context.build_object_model)
 
+            for compiler_name, info in self.custom_compilers.items():
+                if info["input"] and info["output"]:
+                    self._process_custom_command(compiler_name, info["input"], info["output"], self.commands[compiler_name])
+            for target_name, info in self.custom_targets_info.items():
+                if info["target"]:
+                    self._process_custom_target(target_name, info["target"], self.commands[target_name], info["depends"])
+            for target_name, info in self.post_targetdeps.items():
+                if info["target"]:
+                    self._process_custom_target(target_name, info["target"], self.commands[target_name], info["depends"])
             if {"type": "directory", "output": "@build_dir@/_build", "dependencies": None} not in self.build_object_model:
                 self.build_object_model.append({
                     "type": "directory",
@@ -586,7 +742,7 @@ class QmakeLogParser(Parser):
                 target_output = self._post_normalize_path(self.context.normalize_path(
                     os.path.join(self.global_config["destdir"], self.global_config["target"]),
                     working_dir=self.context.source_dir,
-                    ignore_working_dir=False
+                    ignore_working_dir=True
                 ))
                 dependencies = list(set(
                     ["@build_dir@/_build"] +
@@ -596,7 +752,9 @@ class QmakeLogParser(Parser):
                     list(self.global_config["resources"]) +
                     list(self.ui_headers) +
                     list(self.moc_sources) +
-                    list(self.rcc_sources)
+                    list(self.rcc_sources) +
+                    [cmd["output"] for cmd in self.global_config["custom_commands"]] +
+                    [tgt["name"] for tgt in self.global_config["custom_targets"]]
                 ))
                 if self.global_config["precompiled_header"]:
                     dependencies.append(self.global_config["precompiled_header"])

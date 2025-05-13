@@ -488,8 +488,10 @@ class CMakeContext(EntryPoint, Generator):
                 # Remove moc_ and ui_ sources, as they will be handled by AUTOMOC/AUTOUIC
                 target["sources"] = [
                     s for s in target.get("sources", [])
-                    if not (s["path"].endswith("moc_mainwindow.cpp") or
-                            s["path"].endswith("ui_mainwindow.h"))
+                    if not (
+                        s["path"].endswith(".cpp") and os.path.basename(s["path"]).startswith("moc_") or
+                        s["path"].endswith(".h") and os.path.basename(s["path"]).startswith("ui_")
+                    )
                 ]
                 # Add .ui file to sources
                 for source in qt_sources:

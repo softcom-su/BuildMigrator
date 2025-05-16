@@ -161,7 +161,10 @@ class CMakeModule(Generator):
                     specify_linker_language = True
 
             for source in target["sources"]:
-                compile_flags = unique_file_flags.get(source["path"])
+                if "unique_file_flags" in locals():
+                    compile_flags = unique_file_flags.get(source["path"])
+                else:
+                    compile_flags = source.get("compile_flags")
                 if compile_flags:
                     compile_flags = self.context.process_compile_flags(compile_flags)
                     # TODO: use source_compile_options()
@@ -187,7 +190,10 @@ class CMakeModule(Generator):
                                 path_, prev_value, value_
                             )
                         )
-                include_dirs = unique_file_dirs.get(source["path"])
+                if "unique_file_dirs" in locals():
+                    include_dirs = unique_file_dirs.get(source["path"])
+                else:
+                    include_dirs = source.get("include_dirs")
                 if include_dirs:
                     # TODO: use source_include_directories()
                     path_ = source["path"]

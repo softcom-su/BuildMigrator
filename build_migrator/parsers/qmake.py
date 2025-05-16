@@ -325,8 +325,7 @@ class QmakeLogParser(Parser):
                                     else:
                                         moc_path = self._post_normalize_path(self.context.normalize_path(
                                             os.path.join(self.global_config["moc_dir"], "moc_%s.cpp" % os.path.basename(header_path).rsplit('.', 1)[0]),
-                                            working_dir=self.context.source_dir,
-                                            ignore_working_dir=False
+                                            ignore_working_dir=True
                                         ))
                                         if moc_path not in self.moc_sources:
                                             self.moc_sources.add(moc_path)
@@ -356,8 +355,7 @@ class QmakeLogParser(Parser):
                                 base_name = os.path.basename(form).rsplit('.', 1)[0]
                                 output = self._post_normalize_path(self.context.normalize_path(
                                     os.path.join(self.global_config["ui_dir"], "ui_" + base_name + ".h"),
-                                    working_dir=self.context.source_dir,
-                                    ignore_working_dir=False
+                                    ignore_working_dir=True
                                 ))
                                 if output not in self.ui_headers:
                                     self.ui_headers.add(output)
@@ -394,8 +392,7 @@ class QmakeLogParser(Parser):
                                 base_name = os.path.basename(resource).rsplit('.', 1)[0]
                                 output = self._post_normalize_path(self.context.normalize_path(
                                     os.path.join(self.global_config["rcc_dir"], "qrc_" + base_name + ".cpp"),
-                                    working_dir=self.context.source_dir,
-                                    ignore_working_dir=False
+                                    ignore_working_dir=True
                                 ))
                                 if output not in self.rcc_sources:
                                     self.rcc_sources.add(output)
@@ -647,12 +644,12 @@ class QmakeLogParser(Parser):
                         compiler_name, inputs = value
                         if compiler_name not in self.custom_compilers:
                             self.custom_compilers[compiler_name] = {"input": [], "output": "", "commands": "", "variable": ""}
-                        self.custom_compilers[compiler_name]["input"] = inputs.split() if inputs else []
+                        self.custom_compilers[compiler_name]["input"] = [self._post_normalize_path(self.context.normalize_path(input, working_dir=self.context.source_dir, ignore_working_dir=False)) for input in inputs.split()] if inputs else []
                     elif key == "compiler_output":
                         compiler_name, output = value
                         if compiler_name not in self.custom_compilers:
                             self.custom_compilers[compiler_name] = {"input": [], "output": "", "commands": "", "variable": ""}
-                        self.custom_compilers[compiler_name]["output"] = output
+                        self.custom_compilers[compiler_name]["output"] = self._post_normalize_path(self.context.normalize_path(output, ignore_working_dir=False))
                     elif key == "compiler_variable":
                         compiler_name, variable = value
                         if compiler_name not in self.custom_compilers:

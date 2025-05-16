@@ -219,8 +219,15 @@ class CMakeContext(EntryPoint, Generator):
         self._builtin_generators = {
             "file": self._generate_for_file,
             "directory": self._generate_for_directory,
+            "custom_command": self._generate_for_custom_command,
+            "custom_target": self._generate_for_custom_target,
         }
         self.flat_build_dir = flat_build_dir
+
+        # Default C++ standard settings
+        self.cxx_standard = "17"
+        self.cxx_standard_required = "ON"
+        self.cxx_extensions = "OFF"
 
     def open(self, path, *args, **kwargs):
         assert not os.path.isabs(path), path
@@ -538,6 +545,11 @@ class CMakeContext(EntryPoint, Generator):
         class_id = 1
         modules_found = False
         prebuilt_file_counter = 0
+        std_re = re.compile(r"-std=(c\+\+|gnu\+\+)(11|14|17|20|23|1y|0x|98)", re.IGNORECASE)
+        config_std_re = re.compile(r"c\+\+(\d+)", re.IGNORECASE)
+        valid_standards = {"98", "11", "14", "17", "20", "23"}
+        std_map = {"0x": "11", "1y": "14"}  # Map old standards (e.g., gnu++1y -> 14)
+
         for target in targets:
             self._rename_target(target)
             target_output_list = self._get_target_output_list(target)
@@ -562,7 +574,38 @@ class CMakeContext(EntryPoint, Generator):
                         nasm_sources.append(s)
                     if s.get("extension") in [".ui", ".qrc"]:
                         qt_sources.append(s)
+                    # Check compile_flags in sources
+                    for flag in s.get("compile_flags", []):
+                        match = std_re.match(flag)
+                        if match:
+                            std = match.group(2).lower()
+                            std = std_map.get(std, std)  # Map 1y -> 14, 0x -> 11
+                            if std in valid_standards and std != self.cxx_standard:
+                                self.cxx_standard = std
+                                self.cxx_extensions = "ON" if match.group(1).lower() == "gnu++" else "OFF"
                 modules_found = True
+                # Check for C++ standard in module targets
+                for flag_key in ["cxxflags", "cxxflags_release", "cxxflags_debug"]:
+                    if flag_key in target:
+                        for flag in target.get(flag_key, []):
+                            match = std_re.match(flag)
+                            if match:
+                                std = match.group(2).lower()
+                                std = std_map.get(std, std)
+                                if std in valid_standards and std != self.cxx_standard:
+                                    self.cxx_standard = std
+                                    self.cxx_extensions = "ON" if match.group(1).lower() == "gnu++" else "OFF"
+                if "config" in target:
+                    config = target["config"]
+                    if isinstance(config, str):
+                        config = config.split()
+                    for item in config:
+                        match = config_std_re.match(item)
+                        if match:
+                            std = match.group(1)
+                            if std in valid_standards and std != self.cxx_standard:
+                                self.cxx_standard = std
+                                # Assume extensions OFF unless gnu++ found in cxxflags
 
         if self.prebuilt_subdir not in (None, "."):
             self.copy_prebuilt_files_using_glob = (
@@ -679,7 +722,10 @@ class CMakeContext(EntryPoint, Generator):
             with self.open(path, "w") as f:
                 f.write("set({}\n".format(argv_from_file_var))
                 for arg in argv:
-                    f.write(self.format(arg, escape_slash=False) + "\n")
+                    if arg in ["COMMAND", "DEPENDS"]:
+                        f.write(self.format(arg, escape_slash=False) + " ")
+                    else:
+                        f.write(self.format(arg, escape_slash=False) + "\n")
                 f.write(")\n")
             get_string_from_file = "include({})\n".format(
                 self.format_location(path, False)
@@ -687,6 +733,15 @@ class CMakeContext(EntryPoint, Generator):
             argv_str += "${" + argv_from_file_var + "}"
         else:
             argv_str += self.format(" ".join(argv), escape_slash=False)
+        
+        if "COMMAND" in argv_str:
+            index = argv.index("DEPENDS")
+            command = argv[:index]
+            depends = argv[index:]
+            argv_str = "\n    " + self.format(" ".join(command), escape_slash=False) + "\n    " + self.format(" ".join(depends), escape_slash=False) + "\n"
+            if end_formal_args:
+                end_str = "   " + end_str + "\n"
+            return get_string_from_file + begin_str + argv_str + end_str + ")\n"
 
         if len(argv_str) > 60:
             argv_str = "\n    " + self.format("\n    ".join(argv), escape_slash=False) + "\n"
@@ -782,6 +837,10 @@ class CMakeContext(EntryPoint, Generator):
         for lang in extra_languages:
             result += self.format("enable_language({lang})\n", lang=lang)
         result += "\n"
+        if "CXX" in main_languages:
+            result += f"set(CMAKE_CXX_STANDARD {self.cxx_standard})\n"
+            result += f"set(CMAKE_CXX_STANDARD_REQUIRED {self.cxx_standard_required})\n"
+            result += f"set(CMAKE_CXX_EXTENSIONS {self.cxx_extensions})\n\n"
         includes = ["include({})".format(inc) for inc in (includes or [])]
         result += "\n".join(includes)
         if includes:
@@ -945,6 +1004,56 @@ class CMakeContext(EntryPoint, Generator):
                     "file(MAKE_DIRECTORY {output})\n", output=self.quote(output)
                 )
             )
+
+    def _generate_for_custom_command(self, target):
+        with self.open("CMakeLists.txt", "a") as f:
+            dependencies = []
+            for dep in target.get("dependencies", []):
+                if dep in self.target_index:
+                    dep_target = self.target_index[dep]
+                    if dep_target.get("name"):
+                        dependencies.append(dep_target["name"])
+                    else:
+                        dependencies.append(dep)
+                else:
+                    dependencies.append(dep)
+            commands = target.get("commands", [target["command"]])
+            argv = []
+            for cmd in commands:
+                argv.extend(["COMMAND", cmd])
+            for dpnd in dependencies:
+                argv.extend(["DEPENDS", dpnd])
+            f.write(self.format_call(
+                "add_custom_command",
+                ["OUTPUT", self.quote(target["output"])],
+                argv=argv,
+                end_formal_args=["VERBATIM"]
+            ) + "\n")
+
+    def _generate_for_custom_target(self, target):
+        with self.open("CMakeLists.txt", "a") as f:
+            dependencies = []
+            for dep in target.get("dependencies", []):
+                if dep in self.target_index:
+                    dep_target = self.target_index[dep]
+                    if dep_target.get("name"):
+                        dependencies.append(dep_target["name"])
+                    else:
+                        dependencies.append(dep)
+                else:
+                    dependencies.append(dep)
+            commands = target.get("commands", [])
+            argv = []
+            for cmd in commands:
+                argv.extend(["COMMAND", cmd])
+            for dpnd in dependencies:
+                argv.extend(["DEPENDS", dpnd])
+            f.write(self.format_call(
+                "add_custom_target",
+                [target["name"]],
+                argv=argv,
+                end_formal_args=["VERBATIM"]
+            ) + "\n")
 
     _glob_template = """
 set(copy_prebuilt_artifacts_DIR {prebuild_subdir})

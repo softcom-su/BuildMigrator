@@ -5,6 +5,7 @@ from __future__ import absolute_import
 
 import argparse
 import logging
+import glob
 import os
 from pprint import pformat
 import re
@@ -123,6 +124,12 @@ class CMakeContext(EntryPoint, Generator):
             "@build_dir@/1/2/3/libfoo.a becomes @build_dir@/libfoo.a.",
         )
         arg_parser.add_argument(
+            "--build_dir",
+            metavar="DIR",
+            nargs="+",
+            help="Optional build directory or directories. Default: '/_build'."
+        )
+        arg_parser.add_argument(
             "--qt_version",
             choices=["5", "6"],
             default="5",
@@ -178,15 +185,6 @@ class CMakeContext(EntryPoint, Generator):
         self.qt_components = qt_components or []
         self.qt_enabled = bool(self.qt_components)
 
-        # source_subdir
-        self.source_dir_full_path = os.path.abspath(os.path.join(self.out_dir, self.source_subdir)).replace('\\', '/')
-        # ${CMAKE_CURRENT_LIST_DIR}
-        self.current_list_dir_full_path = os.path.abspath(self.out_dir).replace('\\', '/')
-        # ${CMAKE_CURRENT_BINARY_DIR}
-        if build_dir is None:
-            build_dir = self.out_dir
-        self.build_dir_full_path = os.path.abspath(build_dir).replace('\\', '/')
-
         self.rename_patterns = []
         for pattern, repl in rename_patterns or []:
             self.rename_patterns.append((re.compile(pattern), repl))
@@ -203,15 +201,20 @@ class CMakeContext(EntryPoint, Generator):
             self.cflags_placeholder: "CMAKE_C_FLAGS",
         }
         self.values = {
-            self.build_dir_placeholder: self.build_dir_full_path,
+            self.build_dir_placeholder: "",
             self.cflags_placeholder: "${CMAKE_C_FLAGS}",
-            self.source_dir_placeholder: self.source_dir_full_path,
+            self.source_dir_placeholder: "",
         }
         self.substitutions = {
-            self.build_dir_placeholder: self.build_dir_full_path,
+            self.build_dir_placeholder: "",
             self.cflags_placeholder: "@CMAKE_C_FLAGS@",
-            self.source_dir_placeholder: self.source_dir_full_path,
+            self.source_dir_placeholder: "",
         }
+
+        if build_dir is None:
+            build_dir = self.format(self.out_dir)
+        else:
+            build_dir = build_dir[0]
 
         self.target_index = {}
         self.yasm_global_compile_flags = {}
@@ -221,6 +224,9 @@ class CMakeContext(EntryPoint, Generator):
             "directory": self._generate_for_directory,
             "custom_command": self._generate_for_custom_command,
             "custom_target": self._generate_for_custom_target,
+            "installs": self._generate_for_installs,
+            "subproject": self._generate_for_subproject,
+            "include": self._generate_for_include,
         }
         self.flat_build_dir = flat_build_dir
 
@@ -264,7 +270,7 @@ class CMakeContext(EntryPoint, Generator):
 
     def format_location(self, location, prepend_var=True):
         if prepend_var:
-            location = self.current_list_dir_full_path + "/" + location
+            location = location
         return self.quote(location)
 
     def format_cache_variable(self, name, value=None, type="STRING"):
@@ -489,6 +495,7 @@ class CMakeContext(EntryPoint, Generator):
             "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so",
             "/usr/lib/x86_64-linux-gnu/libQt5Gui.so",
             "/usr/lib/x86_64-linux-gnu/libQt5Core.so",
+            "/usr/lib/x86_64-linux-gnu/libQt5Network.so",
         ]
         for target in targets:
             if target["type"] == "module":
@@ -527,6 +534,8 @@ class CMakeContext(EntryPoint, Generator):
                                 lib = "Qt5::Gui"
                             elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Core.so":
                                 lib = "Qt5::Core"
+                            elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Network.so":
+                                lib = "Qt5::Network"
                         if lib == "GL":
                             lib = "OpenGL::GL"
                         elif lib == "pthread":
@@ -646,20 +655,28 @@ class CMakeContext(EntryPoint, Generator):
                 )
             )
 
-            has_qt = any(
-                any(lib in [
-                    "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so",
-                    "/usr/lib/x86_64-linux-gnu/libQt5Gui.so",
-                    "/usr/lib/x86_64-linux-gnu/libQt5Core.so",
-                    "Qt5::Widgets", "Qt5::Gui", "Qt5::Core"
-                ] for lib in t.get("libs", [])) for t in targets
-            )
-            if has_qt:
+            qt_modules_map = {
+                "Widgets": ["/usr/lib/x86_64-linux-gnu/libQt5Widgets.so", "Qt5::Widgets"],
+                "Gui": ["/usr/lib/x86_64-linux-gnu/libQt5Gui.so", "Qt5::Gui"],
+                "Core": ["/usr/lib/x86_64-linux-gnu/libQt5Core.so", "Qt5::Core"],
+                "Network": ["/usr/lib/x86_64-linux-gnu/libQt5Network.so", "Qt5::Network"],
+            }
+
+            qt_modules_used = set()
+
+            for t in targets:
+                for lib in t.get("libs", []):
+                    for module, names in qt_modules_map.items():
+                        if lib in names:
+                            qt_modules_used.add(module)
+
+            if qt_modules_used:
                 f.write("set(CMAKE_AUTOMOC ON)\n")
                 f.write("set(CMAKE_AUTOUIC ON)\n")
                 f.write("set(CMAKE_AUTORCC ON)\n")
                 f.write("\n")
-                f.write("find_package(Qt5 COMPONENTS Widgets Gui Core REQUIRED)\n")
+                modules_str = " ".join(sorted(qt_modules_used))
+                f.write(f"find_package(Qt5 COMPONENTS {modules_str} REQUIRED)\n")
             if any("GL" in t.get("libs", []) or "OpenGL::GL" in t.get("libs", []) for t in targets):
                 f.write("find_package(OpenGL REQUIRED)\n")
             if any("pthread" in t.get("libs", []) or "Threads::Threads" in t.get("libs", []) for t in targets):
@@ -754,7 +771,7 @@ class CMakeContext(EntryPoint, Generator):
         if kwargs:
             str_fmt = str_fmt.format(**kwargs)
         for placeholder in self.placeholders:
-            str_fmt = str_fmt.replace(placeholder, self.values[placeholder])
+            str_fmt = str_fmt.replace(placeholder + "/", self.values[placeholder])
         if escape_slash:
             # supported escape sequences: \r, \t, \n, \"
             return re.sub(r'\\(?!["trn])', r"\\\\", str_fmt)
@@ -845,7 +862,7 @@ class CMakeContext(EntryPoint, Generator):
         result += "\n".join(includes)
         if includes:
             result += "\n"
-        result += "list(APPEND CMAKE_MODULE_PATH "+self.quote(self.current_list_dir_full_path)+")\n"
+        result += "list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR})\n"
         result += "include(extensions)\n\n"
         return result
 
@@ -1054,6 +1071,44 @@ class CMakeContext(EntryPoint, Generator):
                 argv=argv,
                 end_formal_args=["VERBATIM"]
             ) + "\n")
+        
+    def _generate_for_installs(self, target):
+        args_d = ["DIRECTORY"]
+        args_f = ["FILES"]
+        with self.open("CMakeLists.txt", "a") as f:
+            files = []
+            for file in target.get("dependencies", []):
+                if "*" in file:
+                    files_path = os.path.abspath(os.path.join(os.path.dirname(self.out_dir),self.format(file)))
+                    for file in glob.glob(files_path):
+                        if os.path.isdir(file):
+                            args_d.extend([file.replace(os.path.dirname(self.out_dir), "")])
+                        else:
+                            args_f.extend([file.replace(os.path.dirname(self.out_dir), "")])
+                else:
+                    args_f.extend([file])
+
+                if file in self.target_index:
+                    file_target = self.target_index[file]
+                    if file_target.get("name"):
+                        files.append(file_target["name"])
+                    else:
+                        files.append(file)
+                else:
+                    files.append(file)
+
+            if len(args_d) != 1:
+                f.write(self.format_call(
+                    "install",
+                    args_d,
+                    argv=["DESTINATION", self.quote(target["output"])]
+                ) + "\n")
+            if len(args_f) != 1:
+                f.write(self.format_call(
+                    "install",
+                    args_f,
+                    argv=["DESTINATION", self.quote(target["output"])]
+                ) + "\n")
 
     _glob_template = """
 set(copy_prebuilt_artifacts_DIR {prebuild_subdir})
@@ -1117,6 +1172,61 @@ endforeach()
                 output=self.quote(target["output"]),
             )
             f.write(s)
+    
+    def _generate_for_include(self, target):
+        include, ext = os.path.splitext(self.format(target["output"]))
+        with self.open("CMakeLists.txt", "a") as f:
+            f.write(self.format_call("include", [], [self.quote(include)]))
+
+
+    def _generate_for_subproject(self, target):
+        """Generate CMake commands for a subproject target."""
+        if target["module_type"] != "subdirs":
+            logger.warning(f"Skipping subproject with unsupported module_type: {target['module_type']}")
+            return
+
+        subdir = target["output"]
+        if not subdir:
+            logger.warning(f"Could not extract subdirectory from output: {target['output']}")
+            return
+        
+        if "name" not in target:
+            target["name"] = subdir.replace("/", "_").replace("\\", "_")
+            self._rename_target(target)
+
+        if target["output"] not in self.target_index:
+            self.target_index[target["output"]] = target
+
+        with self.open("CMakeLists.txt", "a") as f:
+            source_subdir_path = subdir
+            f.write(self.format_add_subdirectory(source_subdir_path))
+            deps = self._get_subproject_dependencies(target)
+            if deps:
+                f.write(self.format_call("add_dependencies", [target["name"]], sorted(deps)))
+
+    def _get_subproject_dependencies(self, target):
+        deps = []
+        for dep_output in target.get("dependencies", []):
+            if dep_output not in self.target_index:
+                logger.debug(f"Dependency not found in target_index: {dep_output}")
+                continue
+            dep_target = self.target_index[dep_output]
+            if dep_target.get("type") != "subproject" or dep_target.get("module_type") != "subdirs":
+                logger.debug(f"Skipping non-subproject dependency: {dep_output}")
+                continue
+            if "name" not in dep_target:
+                subdir = self._get_subdir_from_output(dep_target["output"])
+                if subdir:
+                    dep_target["name"] = subdir.replace("/", "_").replace("\\", "_")
+                    self._rename_target(dep_target)
+                else:
+                    logger.warning(f"Could not assign name to dependency: {dep_output}")
+                    continue
+            deps.append(dep_target["name"])
+        return deps
+
+    def format_add_subdirectory(self, subdir):
+        return self.format_call("add_subdirectory", [], [self.quote(subdir)])
 
 
 __all__ = [

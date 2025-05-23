@@ -2,7 +2,6 @@ from __future__ import print_function
 import re
 import logging
 import os
-import uuid
 try:
     from build_migrator.modules import Parser
 except ImportError:
@@ -40,13 +39,15 @@ class QmakeLogParser(Parser):
             "cxxflags": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXXFLAGS := (.+)"),
             "cflags": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CFLAGS := (.+)"),
             "defines": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: DEFINES := (.+)"),
-            "config": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG := (.+)"),
+            "config": re.compile(r"DEBUG 1: .+?\.pro:\d+: CONFIG := (.+)"),
             "lflags": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_LFLAGS := (.+)"),
             "qt": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QT := (.+)"),
             "moc_dir": re.compile(r"DEBUG 1: .+?\.pro:\d+: MOC_DIR := (.+)"),
             "ui_dir": re.compile(r"DEBUG 1: .+?\.pro:\d+: UI_DIR := (.+)"),
             "rcc_dir": re.compile(r"DEBUG 1: .+?\.pro:\d+: RCC_DIR := (.+)"),
             "subdirs": re.compile(r"DEBUG 1: .+?\.pro:\d+: SUBDIRS := (.+)"),
+            "include": re.compile(r"DEBUG 1: .+?\.pro:\d+: calling built-in include\((.+)\)"),
+            "depends": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.depends\s*:=\s*(.+)"),
             "debug_config": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG\(debug, debug\|release\)\s*\{(.+?)\}"),
             "release_config": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG\(release, debug\|release\)\s*\{(.+?)\}"),
             "destdir": re.compile(r"DEBUG 1: .+?\.pro:\d+: DESTDIR := (.+)"),
@@ -55,7 +56,7 @@ class QmakeLogParser(Parser):
             "platform_win32": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: win32\s*\{(.+?)\}"),
             "platform_unix": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: unix\s*\{(.+?)\}"),
             "platform_macx": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: macx\s*\{(.+?)\}"),
-            "testcase": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: CONFIG\s*\+=\s*testcase"),
+            "testcase": re.compile(r"DEBUG 1: .+?\.pro:\d+: CONFIG\s*\:=\s*testcase_targets"),
             "cxxflags_release": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXXFLAGS_RELEASE := (.+)"),
             "cxxflags_debug": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: QMAKE_CXXFLAGS_DEBUG := (.+)"),
             "distfiles": re.compile(r"DEBUG 1: .+?\.(pro|prf):\d+: DISTFILES := (.+)"),
@@ -70,6 +71,10 @@ class QmakeLogParser(Parser):
             "pre_targetdeps": re.compile(r"DEBUG 1: .+?\.pro:\d+: PRE_TARGETDEPS\s*\:=\s*(.+)"),
             "post_targetdeps": re.compile(r"DEBUG 1: .+?\.pro:\d+: QMAKE_POST_TARGETDEPS\s*\:=\s*(.+)"),
             "commands": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.commands\s*:=\s*(.+)"),
+            "rc_file": re.compile(r"DEBUG 1: .+?\.pro:\d+: RC_FILE := (.+)"),
+            "installs": re.compile(r"DEBUG 1: .+?\.pro:\d+: INSTALLS := (.+)"),
+            "installs_files": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.files\s*:=\s*(.+)"),
+            "installs_path": re.compile(r"DEBUG 1: .+?\.pro:\d+: (\w+)\.path\s*:=\s*(.+)"),
         }
         self.global_config = {
             "includes": set(),
@@ -90,7 +95,8 @@ class QmakeLogParser(Parser):
             "ui_dir": "@build_dir@/uic",
             "rcc_dir": "@build_dir@/rcc",
             "subdirs": set(),
-            "destdir": "@build_dir@/_build",
+            "subdirs_depends": {},
+            "destdir": "@build_dir@",
             "dependpath": set(),
             "precompiled_header": None,
             "platform_settings": {"win32": set(), "unix": set(), "macx": set()},
@@ -98,6 +104,10 @@ class QmakeLogParser(Parser):
             "version": None,
             "custom_commands": [],
             "custom_targets": [],
+            "config": set(),
+            "conditions": {},
+            "installs": [],
+            "include": set(),
         }
         self.build_object_model = []
         self.processed_sources = set()
@@ -126,6 +136,7 @@ class QmakeLogParser(Parser):
         self.custom_targets_info = {}
         self.post_targetdeps = {}
         self.commands = {}
+        self.installs = {}
 
     def _read_file_content(self, path):
         try:
@@ -139,16 +150,12 @@ class QmakeLogParser(Parser):
             return None
 
     def _get_include_dirs(self):
-        include_dirs = set(["@source_dir@", "@build_dir@/_build", "@source_dir@/include"])
+        include_dirs = set()
+        include_dirs = set(["/usr/include"])
         include_dirs.update(self.global_config["includes"])
         include_dirs.update(self.global_config["dependpath"])
-        if self.global_config["rcc_dir"]:
-            include_dirs.add(self.global_config["rcc_dir"])
-        if self.global_config["ui_dir"]:
-            include_dirs.add(self.global_config["ui_dir"])
-        if self.is_qt_project:
-            include_dirs.update(self.qt_include_dirs)
-        return sorted([path for path in include_dirs if not path.endswith((".pro", ".prf")) and path not in ("prf", "pro")])
+
+        return sorted([path for path in include_dirs if not path.endswith((".pro", ".prf")) and path not in ("prf", "pro") and "build_result" not in path])
 
     def _check_for_qobject(self, content):
         return content and b"Q_OBJECT" in content
@@ -201,42 +208,22 @@ class QmakeLogParser(Parser):
                         self.global_config["libs"].add(normalized_lib)
                 logger.debug(f"Added {platform} LIB: {lib}")
 
-    def _process_custom_command(self, compiler_name, input_files, output, commands):
-        command_id = str(uuid.uuid4())
-        normalized_command = commands.strip()
-        normalized_output = self._post_normalize_path(self.context.normalize_path(output, ignore_working_dir=True))
-        normalized_inputs = [self._post_normalize_path(self.context.normalize_path(inp, ignore_working_dir=True)) for inp in input_files]
-        self.global_config["custom_commands"].append({
-            "id": command_id,
-            "command": normalized_command,
-            "output": normalized_output,
-            "inputs": normalized_inputs
-        })
-        self.build_object_model.append({
-            "type": "custom_command",
-            "command": normalized_command,
-            "output": normalized_output,
-            "dependencies": normalized_inputs,
-            "id": command_id
-        })
+    def _process_extra_targets(self, target_type, **kwargs):
+        dependencies = kwargs.get("dependencies", [])
+        command = kwargs.get("command", "")
+        commands = kwargs.get("commands", [])
+        output = kwargs.get("output", "")
+        name = kwargs.get("name", "")
+        module_type = "subdirs" if target_type == "subproject" else ""
 
-    def _process_custom_target(self, target_name, target, commands, depends):
-        target_id = str(uuid.uuid4())
-        normalized_target = self._post_normalize_path(self.context.normalize_path(target, ignore_working_dir=True))
-        normalized_deps = [self._post_normalize_path(self.context.normalize_path(dep, ignore_working_dir=True)) for dep in depends]
-        normalized_commands = [cmd.strip() for cmd in commands.split("&&")]
-        self.global_config["custom_targets"].append({
-            "id": target_id,
-            "name": normalized_target,
-            "dependencies": normalized_deps,
-            "commands": normalized_commands
-        })
         self.build_object_model.append({
-            "type": "custom_target",
-            "name": normalized_target,
-            "dependencies": normalized_deps,
-            "commands": normalized_commands,
-            "id": target_id
+            "type": target_type,
+            "name": name,
+            "command": command,
+            "output": output,
+            "dependencies": dependencies,
+            "module_type": module_type,
+            "commands": commands,
         })
 
     def parse(self, target):
@@ -256,7 +243,7 @@ class QmakeLogParser(Parser):
                 if match:
                     if key in ["debug_config", "release_config", "platform_win32", "platform_unix", "platform_macx", "testcase"]:
                         value = match.group(0)
-                    elif key in ["compiler_input", "compiler_output", "compiler_variable", "commands", "target_target", "target_depends"]:
+                    elif key in ["compiler_input", "compiler_output", "compiler_variable", "commands", "target_target", "target_depends", "depends", "installs_files", "installs_path"]:
                         if match.groups() and len(match.groups()) >= 2:
                             value = match.groups()
                         else:
@@ -359,6 +346,7 @@ class QmakeLogParser(Parser):
                                 ))
                                 if output not in self.ui_headers:
                                     self.ui_headers.add(output)
+                                self.global_config["sources"].add(form_path)
                                 content = self._read_file_content(form_path)
                                 if content is not None:
                                     self.build_object_model.append({
@@ -396,6 +384,7 @@ class QmakeLogParser(Parser):
                                 ))
                                 if output not in self.rcc_sources:
                                     self.rcc_sources.add(output)
+                                self.global_config["sources"].add(resource_path)
                                 content = self._read_file_content(resource_path)
                                 if content is not None:
                                     self.build_object_model.append({
@@ -406,6 +395,24 @@ class QmakeLogParser(Parser):
                                         "extension": ".qrc"
                                     })
                                 logger.debug("Added RESOURCE: %s -> %s" % (resource_path, output))
+                    elif key == "rc_file":
+                        for file in value.split():
+                            rc_file = self._post_normalize_path(self.context.normalize_path(
+                                file, 
+                                working_dir=self.context.source_dir,
+                                ignore_working_dir=False
+                            ))
+                            self.global_config["sources"].add(rc_file)
+                            content = self._read_file_content(rc_file)
+                            if content is not None:
+                                self.build_object_model.append({
+                                    "content": content,
+                                    "output": rc_file,
+                                    "dependencies": [],
+                                    "type": "file",
+                                    "extension": ".rc"
+                                })
+                        logger.debug(f"Added RC_FILE: {rc_file}")
                     elif key == "distfiles":
                         for distfile in value.split():
                             distfile_path = self._post_normalize_path(self.context.normalize_path(distfile, working_dir=self.context.source_dir))
@@ -475,26 +482,37 @@ class QmakeLogParser(Parser):
                     elif key == "config":
                         config_values = value.split()
                         logger.debug("Processing CONFIG line: %s" % line)
+                        self.global_config["config"].update(config_values)
                         if "gcc" in config_values:
                             self.global_config["compiler"] = "g++"
                             self.global_config["c_compiler"] = "gcc"
+                            logger.debug("Set compiler to gcc/g++")
                         if "c++17" in config_values or "c++1z" in config_values:
                             self.global_config["compile_flags"].add("-std=gnu++1z")
                             logger.debug("Added C++17 flag: -std=gnu++1z")
                         if "c++20" in config_values:
                             self.global_config["compile_flags"].add("-std=gnu++20")
-                        if "debug" in config_values and "release" not in config_values:
+                            logger.debug("Added C++20 flag: -std=gnu++20")
+                        if "debug_and_release" in config_values:
+                            self.debug_config = True
+                            self.release_config = True
+                            self.global_config["compile_flags"].add("-g")
+                            for flag in ["-O2", "-fPIC", "-Wall", "-Wextra"]:
+                                self.global_config["compile_flags"].add(flag)
+                            self.global_config["link_flags"].add("-Wl,-O1")
+                            logger.debug("Activated debug_and_release mode")
+                        elif "debug" in config_values and "release" not in config_values:
                             self.debug_config = True
                             self.release_config = False
                             self.global_config["compile_flags"].add("-g")
                             logger.debug("Activated debug mode")
-                        if "release" in config_values and "debug" not in config_values:
+                        elif "release" in config_values and "debug" not in config_values:
                             self.debug_config = False
                             self.release_config = True
                             for flag in ["-O2", "-fPIC", "-Wall", "-Wextra"]:
                                 self.global_config["compile_flags"].add(flag)
                             self.global_config["link_flags"].add("-Wl,-O1")
-                            logger.debug("Activated release mode via CONFIG")
+                            logger.debug("Activated release mode")
                         if "qt" in config_values or "Qt" in value:
                             self.is_qt_project = True
                             logger.debug("Qt project detected via CONFIG")
@@ -523,6 +541,30 @@ class QmakeLogParser(Parser):
                             logger.debug("Enabled AUTORCC")
                         if "warn_on" in config_values:
                             self.global_config["compile_flags"].update(["-Wall", "-Wextra"])
+                            logger.debug("Enabled warn_on flags")
+                        if "shared" in config_values and self.global_config["type"] != "subdirs":
+                            # self.global_config["type"] = "shared_library"
+                            logger.debug("Set module_type to shared_library due to CONFIG=shared")
+                        if "testcase_targets" in config_values and self.global_config["type"] != "subdirs":
+                            self.global_config["testcase"] = True
+                            # self.global_config["type"] = "test_executable"
+                            logger.debug("Enabled testcase_targets: module_type set to test_executable")
+                        if "lex" in config_values:
+                            self.global_config["libs"].add("fl")  # Flex library
+                            logger.debug("Added -lfl for lex")
+                        if "linux" in config_values or "unix" in config_values or "posix" in config_values:
+                            self.global_config["platform_settings"]["unix"].update(
+                                [v for v in config_values if v in ["linux", "unix", "posix"]]
+                            )
+                            logger.debug("Added platform settings: %s" % config_values)
+                        if any(v in config_values for v in ["plugin_manifest", "import_plugins", "import_qpa_plugin"]):
+                            logger.debug("Added -DQT_PLUGIN for plugin-related CONFIG")
+                        if "file_copies" in config_values:
+                            logger.debug("Noted file_copies in CONFIG (no specific action)")
+                        if any(v in config_values for v in ["done_config_SL", "done_config_EGL"]):
+                            logger.debug("Ignored internal Qt CONFIG values: %s" % [
+                                v for v in config_values if v in ["done_config_SL", "done_config_EGL"]
+                            ])
                         logger.debug("Processed CONFIG: %s" % config_values)
                     elif key == "lflags":
                         for flag in value.split():
@@ -554,14 +596,29 @@ class QmakeLogParser(Parser):
                     elif key == "rcc_dir":
                         self.global_config["rcc_dir"] = self._post_normalize_path(self.context.normalize_path(value, ignore_working_dir=True))
                         logger.debug("Set RCC_DIR: %s" % self.global_config["rcc_dir"])
+                    elif key == "include":
+                        normalized_include = self._post_normalize_path(self.context.normalize_path(
+                            value,
+                            working_dir=self.context.source_dir,
+                            ignore_working_dir=False
+                        ))
+                        if normalized_include not in self.global_config["include"]:
+                            self.global_config["include"].add(normalized_include)
+                            logger.debug("Added include: (normalized: %s)" % (normalized_include))
                     elif key == "subdirs":
                         for subdir in value.split():
-                            self.global_config["subdirs"].add(self._post_normalize_path(self.context.normalize_path(
+                            normalized_subdir = self._post_normalize_path(self.context.normalize_path(
                                 subdir,
                                 working_dir=self.context.source_dir,
                                 ignore_working_dir=False
-                            )))
-                        logger.debug("Added SUBDIRS: %s" % value)
+                            ))
+                            if normalized_subdir not in self.global_config["subdirs"]:
+                                self.global_config["subdirs"].add(normalized_subdir)
+                                logger.debug("Added SUBDIR: %s (normalized: %s)" % (subdir, normalized_subdir))
+                    elif key == "depends":
+                        subdir_name, depends = value
+                        self.global_config["subdirs_depends"][subdir_name] = depends.split()
+                        logger.debug(f"Added DEPENDS for {subdir_name}: {depends}")
                     elif key == "debug_config":
                         self._process_conditional_config(match.group(1), "debug")
                         self.debug_config = True
@@ -689,7 +746,7 @@ class QmakeLogParser(Parser):
                             normalized_dep = self._post_normalize_path(self.context.normalize_path(dep, ignore_working_dir=True))
                             for target_name, info in self.custom_targets_info.items():
                                 if info["target"] == dep:
-                                    self._process_custom_target(target_name, info["target"], info["commands"], info["depends"])
+                                    self._process_extra_target("custom_targets", name=info["target"], commands=info["commands"], dependencies=info["depends"])
                                     break
                     elif key == "post_targetdeps":
                         for target_name in value.split():
@@ -698,6 +755,20 @@ class QmakeLogParser(Parser):
                                 if target_name in self.custom_targets_info:
                                     self.post_targetdeps[target_name]["depends"] = self.custom_targets_info[target_name]["depends"]
                                     self.post_targetdeps[target_name]["target"] = self.custom_targets_info[target_name]["target"]
+                    elif key == "installs":
+                        for install in value.split():
+                            if install not in self.installs:
+                                self.installs[install] = {"files": [], "path": ""}
+                    elif key == "installs_files":
+                        install_name, files = value
+                        if install_name not in self.installs:
+                            self.installs[install_name] = {"files": [], "path": ""}
+                        self.installs[install_name]["files"] = [self._post_normalize_path(self.context.normalize_path(file, working_dir=self.context.source_dir, ignore_working_dir=False)) for file in files.split()] if files else []
+                    elif key == "installs_path":
+                        install_name, path = value
+                        if install_name not in self.installs:
+                            self.installs[install_name] = {"files": [], "path": ""}
+                        self.installs[install_name]["path"] = self._post_normalize_path(self.context.normalize_path(path, ignore_working_dir=False))
                     target["line"] = ""
 
         if is_eof:
@@ -707,34 +778,55 @@ class QmakeLogParser(Parser):
 
             for compiler_name, info in self.custom_compilers.items():
                 if info["input"] and info["output"]:
-                    self._process_custom_command(compiler_name, info["input"], info["output"], self.commands[compiler_name])
+                    self._process_extra_targets("custom_commands", name=compiler_name, dependencies=info["input"], output=info["output"], command=self.commands[compiler_name])
             for target_name, info in self.custom_targets_info.items():
                 if info["target"]:
-                    self._process_custom_target(target_name, info["target"], self.commands[target_name], info["depends"])
+                    self._process_extra_targets("custom_targets", name=info["target"], commands=self.commands[target_name], dependencies=info["depends"])
             for target_name, info in self.post_targetdeps.items():
                 if info["target"]:
-                    self._process_custom_target(target_name, info["target"], self.commands[target_name], info["depends"])
-            if {"type": "directory", "output": "@build_dir@/_build", "dependencies": None} not in self.build_object_model:
-                self.build_object_model.append({
-                    "type": "directory",
-                    "output": "@build_dir@/_build",
-                    "dependencies": None
-                })
+                    self._process_extra_targets("custom_targets", name=info["target"], commands=self.commands[target_name], dependencies=info["depends"])
+            for install_name, info in self.installs.items():
+                if info["path"] and info["files"]:
+                    self._process_extra_targets("installs", dependencies=info["files"], output=info["path"])
+            for subdir in self.global_config["subdirs"]:
+                self._process_extra_targets("subproject", output=subdir)
+            for include in self.global_config["include"]:
+                self._process_extra_targets("include", output=include)
 
             if self.global_config["type"] == "subdirs":
+                processed_subdirs = set()
                 for subdir in self.global_config["subdirs"]:
+                    if subdir in processed_subdirs:
+                        logger.debug("Skipping duplicate subdir: %s" % subdir)
+                        continue
+                    processed_subdirs.add(subdir)
+                    subdir_pro = os.path.join(subdir, f"{os.path.basename(subdir)}.pro")
                     subdir_path = self._post_normalize_path(self.context.normalize_path(
-                        os.path.join(subdir, f"{os.path.basename(subdir)}.pro"),
+                        subdir_pro,
                         working_dir=self.context.source_dir,
-                        ignore_working_dir=False
+                        ignore_working_dir=True
                     ))
+                    dependencies = []
+                    subdir_name = os.path.basename(subdir)
+                    if subdir_name in self.global_config["subdirs_depends"]:
+                        for dep in self.global_config["subdirs_depends"][subdir_name]:
+                            dep_pro = self._post_normalize_path(self.context.normalize_path(
+                                os.path.join(dep, f"{dep}.pro"),
+                                working_dir=self.context.source_dir,
+                                ignore_working_dir=False
+                            ))
+                            dependencies.append(dep_pro)
                     self.build_object_model.append({
                         "type": "subproject",
-                        "output": subdir_path,
-                        "dependencies": [],
-                        "module_type": "subdirs"
+                        "output": subdir,
+                        "dependencies": dependencies,
+                        "module_type": "subdirs",
+                        "config": sorted(self.global_config["config"]),
+                        "compile_flags": sorted(self.global_config["compile_flags"])if self.active_conditions else None,
+                        "link_flags": sorted(self.global_config["link_flags"])if self.active_conditions else None,
+                        "conditions": self.active_conditions.copy() if self.active_conditions else None
                     })
-                    logger.info("Added subproject: %s" % subdir_path)
+                    logger.info("Added subproject: %s with dependencies: %s" % (subdir_path, dependencies))
             elif self.global_config["target"] and self.global_config["sources"]:
                 target_output = self._post_normalize_path(self.context.normalize_path(
                     os.path.join(self.global_config["destdir"], self.global_config["target"]),
@@ -742,16 +834,17 @@ class QmakeLogParser(Parser):
                     ignore_working_dir=True
                 ))
                 dependencies = list(set(
-                    ["@build_dir@/_build"] +
                     list(self.global_config["sources"]) +
                     list(self.global_config["headers"]) +
                     list(self.global_config["forms"]) +
                     list(self.global_config["resources"]) +
+                    list(self.global_config["dependpath"]) +
                     list(self.ui_headers) +
                     list(self.moc_sources) +
                     list(self.rcc_sources) +
                     [cmd["output"] for cmd in self.global_config["custom_commands"]] +
-                    [tgt["name"] for tgt in self.global_config["custom_targets"]]
+                    [tgt["name"] for tgt in self.global_config["custom_targets"]] +
+                    [install["output"] for install in self.global_config["installs"]]
                 ))
                 if self.global_config["precompiled_header"]:
                     dependencies.append(self.global_config["precompiled_header"])
@@ -763,9 +856,9 @@ class QmakeLogParser(Parser):
                     "sources": [{
                         "path": source_path,
                         "dependencies": [],
-                        "compile_flags": sorted(self.global_config["compile_flags"]) if source_path.endswith((".cpp", ".cc", ".cxx", ".ui", ".qrc")) else [],
+                        "compile_flags": sorted(self.global_config["compile_flags"]) if source_path.endswith((".cpp", ".cc", ".cxx", ".ui", ".qrc", ".rc")) else [],
                         "language": "C++" if source_path.endswith((".cpp", ".cc", ".cxx")) else None,
-                        "include_dirs": self._get_include_dirs() if source_path.endswith((".cpp", ".cc", ".cxx", ".ui", ".qrc")) else []
+                        "include_dirs": self._get_include_dirs() if source_path.endswith((".cpp", ".cc", ".cxx", ".ui", ".qrc", ".rc")) else []
                     } for source_path in sorted(self.global_config["sources"])],
                     "objects": [],
                     "module_type": self.global_config["type"],
@@ -775,7 +868,8 @@ class QmakeLogParser(Parser):
                     "version": self.global_config["version"],
                     "compatibility_version": self.global_config["version"].split('.')[0] if self.global_config["version"] else None,
                     "output": target_output,
-                    "type": "module"
+                    "type": "module",
+                    "config": sorted(self.global_config["config"])
                 })
                 logger.info("Added target: %s (type: %s)" % (self.global_config["target"], self.global_config["type"]))
                 self.context.build_object_model = self.build_object_model

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class QmakeLogParser(Parser):
     """Parser for qmake -d logs in BuildMigrator, generating build_object_model for Qt projects."""
     
-    priority = 1
+    priority = 2
 
     @staticmethod
     def add_arguments(arg_parser):
@@ -137,6 +137,7 @@ class QmakeLogParser(Parser):
         self.post_targetdeps = {}
         self.commands = {}
         self.installs = {}
+        self.conditions = []
 
     def _read_file_content(self, path):
         try:
@@ -228,6 +229,8 @@ class QmakeLogParser(Parser):
 
     def parse(self, target):
         line = target.get("line", "")
+        if target.get("conditions", "") != "":
+            self.conditions = target.get("conditions", "")
         is_eof = target.get("eof", False)
 
         if line:
@@ -873,6 +876,8 @@ class QmakeLogParser(Parser):
                 })
                 logger.info("Added target: %s (type: %s)" % (self.global_config["target"], self.global_config["type"]))
                 self.context.build_object_model = self.build_object_model
+            if self.global_config["target"] and self.conditions:
+                self.build_object_model.append({"type": "conditions", "project_name":self.global_config["target"], "conditions": self.conditions, "output": "conditions", "dependencies": []})
             elif not self.global_config["target"]:
                 logger.warning("Skipped final target: TARGET not specified in log")
             elif not self.global_config["sources"]:

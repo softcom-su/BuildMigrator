@@ -227,6 +227,7 @@ class CMakeContext(EntryPoint, Generator):
             "installs": self._generate_for_installs,
             "subproject": self._generate_for_subproject,
             "include": self._generate_for_include,
+            "conditions": self._generate_for_conditions,
         }
         self.flat_build_dir = flat_build_dir
 
@@ -486,17 +487,13 @@ class CMakeContext(EntryPoint, Generator):
             "-DQT_WIDGETS_LIB",
             "-DQT_GUI_LIB",
             "-DQT_CORE_LIB",
+            "-DQT_NETWORK_LIB",
         ]
         qt_include_prefixes = [
             "/usr/include/x86_64-linux-gnu/qt5",
             "/usr/lib/x86_64-linux-gnu/qt5/mkspecs",
         ]
-        qt_libs = [
-            "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so",
-            "/usr/lib/x86_64-linux-gnu/libQt5Gui.so",
-            "/usr/lib/x86_64-linux-gnu/libQt5Core.so",
-            "/usr/lib/x86_64-linux-gnu/libQt5Network.so",
-        ]
+        qt_lib_pattern = re.compile(r"/usr/lib/x86_64-linux-gnu/libQt5(\w+)\.so")
         for target in targets:
             if target["type"] == "module":
                 # Remove moc_ and ui_ sources, as they will be handled by AUTOMOC/AUTOUIC
@@ -527,16 +524,11 @@ class CMakeContext(EntryPoint, Generator):
                     unique_libs = []
                     seen = set()
                     for lib in target["libs"]:
-                        if lib in qt_libs:
-                            if lib == "/usr/lib/x86_64-linux-gnu/libQt5Widgets.so":
-                                lib = "Qt5::Widgets"
-                            elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Gui.so":
-                                lib = "Qt5::Gui"
-                            elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Core.so":
-                                lib = "Qt5::Core"
-                            elif lib == "/usr/lib/x86_64-linux-gnu/libQt5Network.so":
-                                lib = "Qt5::Network"
-                        if lib == "GL":
+                        match = qt_lib_pattern.match(lib)
+                        if match:
+                            component = match.group(1)
+                            lib = f"Qt5::{component}"
+                        elif lib == "GL":
                             lib = "OpenGL::GL"
                         elif lib == "pthread":
                             lib = "Threads::Threads"
@@ -655,20 +647,14 @@ class CMakeContext(EntryPoint, Generator):
                 )
             )
 
-            qt_modules_map = {
-                "Widgets": ["/usr/lib/x86_64-linux-gnu/libQt5Widgets.so", "Qt5::Widgets"],
-                "Gui": ["/usr/lib/x86_64-linux-gnu/libQt5Gui.so", "Qt5::Gui"],
-                "Core": ["/usr/lib/x86_64-linux-gnu/libQt5Core.so", "Qt5::Core"],
-                "Network": ["/usr/lib/x86_64-linux-gnu/libQt5Network.so", "Qt5::Network"],
-            }
-
+            qt_lib_pattern = re.compile(r"/usr/lib/x86_64-linux-gnu/libQt5(\w+)\.so")
             qt_modules_used = set()
 
             for t in targets:
                 for lib in t.get("libs", []):
-                    for module, names in qt_modules_map.items():
-                        if lib in names:
-                            qt_modules_used.add(module)
+                    match = qt_lib_pattern.match(lib)
+                    if match:
+                        qt_modules_used.add(match.group(1))
 
             if qt_modules_used:
                 f.write("set(CMAKE_AUTOMOC ON)\n")
@@ -1203,6 +1189,141 @@ endforeach()
             deps = self._get_subproject_dependencies(target)
             if deps:
                 f.write(self.format_call("add_dependencies", [target["name"]], sorted(deps)))
+
+    def resolve_vars(self, value):
+        if isinstance(value, str):
+            replacements = {
+                '$$BINDIR': '/usr/bin',
+                '$$DATADIR': '/usr/share',
+                '$$PWD': os.path.dirname(self.out_dir),
+            }
+            for var, repl in replacements.items():
+                value = value.replace(var, repl)
+            value = re.sub(r'\$\$(\w+)', r'${\1}', value)
+            return value
+        elif isinstance(value, list):
+            return [self.resolve_vars(v) for v in value if v is not None]
+        return value
+
+    def _generate_for_conditions(self, target):
+        with self.open("CMakeLists.txt", "a") as f:
+            f.write("\n")
+            self._process_conditions(target.get("project_name", ""), f, target.get("conditions", []), target.get("dependencies", []))
+
+    def _process_conditions(self, project_name, file, conditions, dependencies, space=0):
+        for i, cond in enumerate(conditions):
+            condition = cond.get("condition", [])
+            variables = cond.get("variables", {})
+            nested_conditions = cond.get("conditions", [])
+            cmake_condition = self._translate_condition_to_cmake(condition)
+            if condition == ["    "*space + "else"]:
+                file.write("else()\n")
+            else:
+                file.write("    "*space + f"if({cmake_condition})\n" if cmake_condition else "if(TRUE)\n")
+            self._process_variables(project_name, file, variables, dependencies, i, len(conditions), conditions, space)
+            if nested_conditions:
+                self._process_conditions(project_name, file, nested_conditions, dependencies, space+1)
+            next_is_else = (i + 1 < len(conditions)) and conditions[i + 1].get("condition", []) == ["else"]
+            if not next_is_else:
+                file.write("    "*space + "endif()\n\n")
+
+    def _translate_condition_to_cmake(self, condition):
+        if not condition or condition == ["else"]:
+            return ""
+        conditions = [self._translate_single_condition(c) for c in condition if c is not None]
+        return " AND ".join(conditions)
+
+    def _translate_single_condition(self, cond):
+        if cond.startswith("isEmpty("):
+            var_name = cond[8:-1].strip()
+            return f"NOT DEFINED {var_name}"
+        elif cond.startswith("exists("):
+            path = self.resolve_vars(cond[7:-1].strip())
+            return f'EXISTS "{path}"'
+        elif cond.startswith("equals("):
+            var, value = [x.strip() for x in cond[7:-1].split(",", 1)]
+            return f'"{var}" STREQUAL "{value}"'
+        elif cond.startswith("contains("):
+            var, value = [x.strip() for x in cond[9:-1].split(",", 1)]
+            if var == "CONFIG":
+                return f'"{value}" IN_LIST CONFIG'
+            return f'"{value}" IN_LIST {var}'
+        elif cond.startswith("!"):
+            return f"NOT {self._translate_single_condition(cond[1:].strip())}"
+        elif cond in ["bsd", "linux", "unix", "macx"]:
+            return f'"{cond}" IN_LIST CMAKE_SYSTEM_NAME'
+        elif cond == "win32":
+            return 'CMAKE_SYSTEM_NAME MATCHES "Windows"'
+        return f'"{cond}" IN_LIST CONFIG'
+
+    def _process_variables(self, project_name, file, variables, dependencies, cond_index, num_conditions, conditions, space):
+        if not hasattr(self, 'source_files'):
+            self.source_files = []
+        for var_name, var_values in variables.items():
+            if var_name is None or var_values is None:
+                logger.warning(f"Skipping invalid variable: {var_name}")
+                continue
+            var_values = self.resolve_vars(var_values)
+            var_name_lower = var_name.lower()
+            if var_name_lower.endswith(".path"):
+                continue
+            elif var_name_lower.endswith(".files"):
+                install_name = var_name_lower[:-6]
+                install_path = variables.get(f"{install_name}.path", ["/usr"])[0]
+                install_path = self.resolve_vars(install_path)
+                files = []
+                for f in var_values:
+                    if f is None:
+                        continue
+                    if "*" in f:
+                        files.extend([x.replace(os.path.dirname(self.out_dir), "") 
+                                     for x in glob.glob(os.path.abspath(os.path.join(os.path.dirname(self.out_dir), self.format(f))))])
+                    else:
+                        files.append(f)
+                if files:
+                    file.write(self.format_call(
+                        "    "*space + "    install",
+                        ["FILES"] + [self.quote(self.format(f)) for f in files],
+                        argv=["DESTINATION", self.quote(self.format(install_path))]
+                    ))
+            elif var_name_lower in ["sources"]:
+                self.source_files.extend(var_values)
+                if cond_index == num_conditions - 1 or not any(c.get("variables", {}).get(var_name_lower) for c in conditions[cond_index+1:]):
+                    file.write(self.format_call(
+                        "    "*space + "    target_sources",
+                        [project_name, "PRIVATE"],
+                        [self.quote(self.format(f)) for f in self.source_files if f is not None]
+                    ))
+                    self.source_files = []
+            elif var_name_lower in ["libs"]:
+                link_dirs = [v[2:] for v in var_values if v is not None and v.startswith("-L")]
+                libs = [v[2:] if v.startswith("-l") else v for v in var_values if v is not None and not v.startswith("-L")]
+                if link_dirs:
+                    file.write(self.format_call("    "*space + "    link_directories", [], [self.quote(self.format(d)) for d in link_dirs]))
+                if libs:
+                    file.write(self.format_call(
+                        "    "*space + "    target_link_libraries",
+                        [project_name, "PRIVATE"],
+                        [self.quote(self.format(l)) for l in libs]
+                    ))
+            elif var_name_lower.endswith(".defines"):
+                file.write(self.format_call(
+                    "    "*space + "    add_definitions",
+                    [],
+                    [f"-D{self.quote(self.format(v))}" for v in var_values if v is not None]
+                ))
+            elif var_name_lower.endswith(".includepath"):
+                file.write(self.format_call(
+                    "    "*space + "    include_directories",
+                    [],
+                    [self.quote(self.format(v)) for v in var_values if v is not None]
+                ))
+            else:
+                file.write(self.format_call(
+                    "    "*space + "    set",
+                    [var_name.upper()],
+                    [self.quote(self.format(v)) for v in var_values if v is not None]
+                ))
 
     def _get_subproject_dependencies(self, target):
         deps = []

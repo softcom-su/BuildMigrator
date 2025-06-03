@@ -1336,7 +1336,7 @@ endforeach()
                 logger.debug(f"Skipping non-subproject dependency: {dep_output}")
                 continue
             if "name" not in dep_target:
-                subdir = self._get_subdir_from_output(dep_target["output"])
+                subdir = self.format(dep_target["output"])
                 if subdir:
                     dep_target["name"] = subdir.replace("/", "_").replace("\\", "_")
                     self._rename_target(dep_target)

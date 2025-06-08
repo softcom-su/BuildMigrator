@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class BuildLogParserContext(Parser, EntryPoint):
     build_dir_placeholder = "@build_dir@"
     source_dir_placeholder = "@source_dir@"
-    known_log_types = ("ninja", "make", "msbuild", "strace")
+    known_log_types = ("ninja", "make", "msbuild", "strace", "qmake")
 
     @classmethod
     def add_arguments(cls, arg_parser):

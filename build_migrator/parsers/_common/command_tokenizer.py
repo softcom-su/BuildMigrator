@@ -73,7 +73,7 @@ class CommandTokenizer(Parser):
 
     @staticmethod
     def is_applicable(log_type=None):
-        return log_type in ["make", "ninja", "msbuild"]
+        return log_type in ["make", "ninja", "msbuild", "qmake"]
 
     def __init__(
         self, context, tokenizer_ruleset=None, command_substitution=None
